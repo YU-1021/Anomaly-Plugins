@@ -1,0 +1,85 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    env:
+      # 插件按这个 Anomaly 发布版的 SDK Plugin API 编译；升级 API 时同步改这里。
+      ANOMALY_RELEASE: v2.4.3
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 选择 Visual Studio 生成器
+        id: vs
+        shell: pwsh
+        run: |
+          cmake --version | Select-Object -First 1
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw "未找到 vswhere：$vswhere" }
+          $versions = @(& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion)
+          if ($versions.Count -eq 0) { throw '运行器上没有带 MSVC 的 Visual Studio' }
+          Write-Host "已安装 VS：$($versions -join ', ')"
+          $latest = $versions | Sort-Object { [version]$_ } -Descending | Select-Object -First 1
+          $major = ([version]$latest).Major
+          $generator = if ($major -ge 18) { 'Visual Studio 18 2026' } else { 'Visual Studio 17 2022' }
+          Write-Host "生成器：$generator"
+          "generator=$generator" >> $env:GITHUB_OUTPUT
+
+      - name: 下载 Anomaly SDK 与工具
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'anomaly'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          gh release download $env:ANOMALY_RELEASE --repo AnomalyNTE/Anomaly `
+            --pattern 'Anomaly-*-sdk.zip' --pattern 'Anomaly-*-tools.zip' --dir $dir --clobber
+          Expand-Archive (Get-ChildItem $dir -Filter '*-sdk.zip').FullName -DestinationPath (Join-Path $dir 'sdk') -Force
+          Expand-Archive (Get-ChildItem $dir -Filter '*-tools.zip').FullName -DestinationPath (Join-Path $dir 'tools') -Force
+
+      - name: 构建、校验并打包
+        shell: pwsh
+        run: >
+          ./release.ps1
+          -Generator "${{ steps.vs.outputs.generator }}"
+          -SdkDir "$env:RUNNER_TEMP\anomaly\sdk\lib\cmake\AnomalySDK"
+          -ToolsDir "$env:RUNNER_TEMP\anomaly\tools"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-package
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: 上传为 Release 资源
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = (Get-ChildItem dist -Filter '*.zip').FullName
+          $name = Split-Path $zip -Leaf
+          $tag = $env:GITHUB_REF_NAME
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $zip --repo $env:GITHUB_REPOSITORY --title "伤害来源记录 $tag" `
+              --notes "ZIP 与 pluginmaster.json 的 DownloadLinkInstall 对应；SHA256 见工作流日志。"
+            exit 0
+          }
+
+          # 已发布的资源不覆盖：下载地址按版本命名，内容必须保持不变。
+          $existing = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+          if ($existing -contains $name) {
+            Write-Host "Release $tag 已有 $name，跳过上传"
+            exit 0
+          }
+          gh release upload $tag $zip --repo $env:GITHUB_REPOSITORY
