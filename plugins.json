@@ -1,0 +1,8 @@
+[
+  {
+    "short": "damage-source-recorder",
+    "name": "伤害来源记录",
+    "dir": "plugins/DamageSourceRecorder",
+    "package": "DamageSourceRecorder"
+  }
+]
