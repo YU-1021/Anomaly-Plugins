@@ -13,7 +13,7 @@ jobs:
       # 插件按这个 Anomaly 发布版的 SDK Plugin API 编译；升级 API 时同步改这里。
       ANOMALY_RELEASE: v2.4.3
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: 选择 Visual Studio 生成器
         id: vs
@@ -55,7 +55,7 @@ jobs:
           -SdkDir "$env:RUNNER_TEMP\anomaly\sdk\lib\cmake\AnomalySDK"
           -ToolsDir "$env:RUNNER_TEMP\anomaly\tools"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: plugin-packages
           path: build/*/package/*
